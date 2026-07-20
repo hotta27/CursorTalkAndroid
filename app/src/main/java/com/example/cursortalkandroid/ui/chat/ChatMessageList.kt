@@ -13,10 +13,14 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.text.selection.LocalTextSelectionColors
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.text.selection.TextSelectionColors
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -30,12 +34,20 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.dp
 import com.example.cursortalkandroid.data.model.ChatMessage
 import com.example.cursortalkandroid.data.model.ChatRole
+import com.example.cursortalkandroid.ui.theme.AssistantSelectionBackground
+import com.example.cursortalkandroid.ui.theme.AssistantSelectionHandle
+import com.example.cursortalkandroid.ui.theme.UserChatBubble
+import com.example.cursortalkandroid.ui.theme.UserChatOnBubble
+import com.example.cursortalkandroid.ui.theme.UserSelectionBackground
+import com.example.cursortalkandroid.ui.theme.UserSelectionHandle
 
 @Composable
 fun ChatMessageList(
     messages: List<ChatMessage>,
     isStreaming: Boolean,
     modifier: Modifier = Modifier,
+    bookmarkedSourceIds: Set<Long> = emptySet(),
+    onToggleBookmark: (ChatMessage) -> Unit = {},
 ) {
     if (messages.isEmpty()) {
         Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -48,7 +60,10 @@ fun ChatMessageList(
         return
     }
 
-    val listState = rememberLazyListState()
+    // 起動時・履歴復元時は先頭からアニメーションせず、最新メッセージ位置へ即ジャンプする
+    val listState = rememberLazyListState(
+        initialFirstVisibleItemIndex = messages.lastIndex.coerceAtLeast(0),
+    )
     val latestText = messages.lastOrNull()?.text.orEmpty()
     var latestBubbleHeightPx by remember { mutableIntStateOf(0) }
     LaunchedEffect(messages.size, latestText, latestBubbleHeightPx) {
@@ -63,12 +78,15 @@ fun ChatMessageList(
     ) {
         items(messages, key = ChatMessage::id) { message ->
             val isLatest = message.id == messages.last().id
+            val isActivelyStreaming = isStreaming &&
+                message.role == ChatRole.Assistant &&
+                isLatest
             ChatBubble(
                 message = message,
-                showTyping = isStreaming &&
-                    message.role == ChatRole.Assistant &&
-                    isLatest &&
-                    message.text.isEmpty(),
+                showTyping = isActivelyStreaming && message.text.isEmpty(),
+                canBookmark = !isActivelyStreaming && message.text.isNotBlank(),
+                isBookmarked = message.id in bookmarkedSourceIds,
+                onToggleBookmark = { onToggleBookmark(message) },
                 modifier = if (isLatest) {
                     Modifier.onSizeChanged { latestBubbleHeightPx = it.height }
                 } else {
@@ -112,20 +130,37 @@ private suspend fun scrollToRevealLatestMessageBottom(
 private fun ChatBubble(
     message: ChatMessage,
     showTyping: Boolean,
+    canBookmark: Boolean,
+    isBookmarked: Boolean,
+    onToggleBookmark: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val isUser = message.role == ChatRole.User
+    // primary と分離した専用色にし、選択ハイライトが同化しないようにする
     val bubbleColor = if (isUser) {
-        MaterialTheme.colorScheme.primary
+        UserChatBubble
     } else {
         MaterialTheme.colorScheme.surfaceVariant
     }
     val contentColor = if (isUser) {
-        MaterialTheme.colorScheme.onPrimary
+        UserChatOnBubble
     } else {
         MaterialTheme.colorScheme.onSurfaceVariant
     }
     val shape: Shape = MaterialTheme.shapes.large
+    val selectionColors = remember(isUser) {
+        if (isUser) {
+            TextSelectionColors(
+                handleColor = UserSelectionHandle,
+                backgroundColor = UserSelectionBackground,
+            )
+        } else {
+            TextSelectionColors(
+                handleColor = AssistantSelectionHandle,
+                backgroundColor = AssistantSelectionBackground,
+            )
+        }
+    }
 
     Column(
         modifier = modifier.fillMaxWidth(),
@@ -140,13 +175,22 @@ private fun ChatBubble(
         ) {
             when {
                 showTyping -> Text("…", color = contentColor)
-                else -> SelectionContainer {
-                    if (isUser) {
-                        Text(message.text, color = contentColor)
-                    } else {
-                        MarkdownText(message.text, color = contentColor)
+                else -> CompositionLocalProvider(
+                    LocalTextSelectionColors provides selectionColors,
+                ) {
+                    SelectionContainer {
+                        if (isUser) {
+                            Text(message.text, color = contentColor)
+                        } else {
+                            MarkdownText(message.text, color = contentColor)
+                        }
                     }
                 }
+            }
+        }
+        if (canBookmark) {
+            TextButton(onClick = onToggleBookmark) {
+                Text(if (isBookmarked) "★ 保存済み" else "☆ ブックマーク")
             }
         }
     }
