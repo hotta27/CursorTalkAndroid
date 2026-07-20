@@ -98,20 +98,20 @@ class ChatViewModel(
         if (text.isEmpty() || snapshot.isStreaming || snapshot.isLoadingHistory) return
 
         val userId = nextMessageId.incrementAndGet()
-        val assistantId = nextMessageId.incrementAndGet()
+        val typingPlaceholderId = nextMessageId.incrementAndGet()
         val userMessage = ChatMessage(
             id = userId,
             role = ChatRole.User,
             text = text,
         )
-        val assistantMessage = ChatMessage(
-            id = assistantId,
+        val typingPlaceholder = ChatMessage(
+            id = typingPlaceholderId,
             role = ChatRole.Assistant,
             text = "",
         )
         mutableState.update {
             it.copy(
-                messages = it.messages + userMessage + assistantMessage,
+                messages = it.messages + userMessage + typingPlaceholder,
                 input = "",
                 isStreaming = true,
                 error = null,
@@ -124,7 +124,7 @@ class ChatViewModel(
                 repository.streamMessage(snapshot.serverUrl, text, sessionId).collect { event ->
                     when (event) {
                         is SseEvent.Meta -> storeSessionId(event.sessionId)
-                        is SseEvent.Delta -> appendAssistantText(assistantId, event.text)
+                        is SseEvent.Delta -> appendAssistantDelta(event.text)
                         is SseEvent.Done -> storeSessionId(event.sessionId)
                         is SseEvent.Error -> mutableState.update {
                             it.copy(error = event.message)
@@ -136,21 +136,39 @@ class ChatViewModel(
                     it.copy(error = exception.message ?: "応答の取得に失敗しました。")
                 }
             } finally {
-                mutableState.update { it.copy(isStreaming = false) }
+                mutableState.update { current ->
+                    current.copy(
+                        messages = current.messages.withoutTrailingEmptyAssistant(),
+                        isStreaming = false,
+                    )
+                }
                 scheduleHistorySave(immediate = true)
             }
         }
     }
 
-    private fun appendAssistantText(messageId: Long, text: String) {
+    private fun appendAssistantDelta(text: String) {
+        if (text.isEmpty()) return
         mutableState.update { current ->
-            current.copy(
-                messages = current.messages.map { message ->
-                    if (message.id == messageId) message.copy(text = message.text + text) else message
-                },
-            )
+            val messages = current.messages.toMutableList()
+            val last = messages.lastOrNull()
+            if (last != null && last.role == ChatRole.Assistant && last.text.isEmpty()) {
+                messages[messages.lastIndex] = last.copy(text = text)
+            } else {
+                messages += ChatMessage(
+                    id = nextMessageId.incrementAndGet(),
+                    role = ChatRole.Assistant,
+                    text = text,
+                )
+            }
+            current.copy(messages = messages)
         }
         scheduleHistorySave()
+    }
+
+    private fun List<ChatMessage>.withoutTrailingEmptyAssistant(): List<ChatMessage> {
+        val last = lastOrNull() ?: return this
+        return if (last.role == ChatRole.Assistant && last.text.isEmpty()) dropLast(1) else this
     }
 
     private fun storeSessionId(value: String) {

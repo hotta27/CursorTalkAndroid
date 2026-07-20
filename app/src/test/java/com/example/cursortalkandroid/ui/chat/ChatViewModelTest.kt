@@ -27,33 +27,37 @@ class ChatViewModelTest {
     val mainDispatcherRule = MainDispatcherRule()
 
     @Test
-    fun sendAppendsDeltasAndPersistsSession() = runTest(mainDispatcherRule.testDispatcher) {
-        val preferences = FakePreferences()
-        val repository = FakeRepository(
-            events = listOf(
-                SseEvent.Meta("session-1"),
-                SseEvent.Delta("こん"),
-                SseEvent.Delta("にちは"),
-                SseEvent.Done("session-1"),
-            ),
-        )
-        val viewModel = ChatViewModel(repository, preferences)
-        advanceUntilIdle()
+    fun sendCreatesSeparateBubblesPerDeltaAndPersistsSession() =
+        runTest(mainDispatcherRule.testDispatcher) {
+            val preferences = FakePreferences()
+            val repository = FakeRepository(
+                events = listOf(
+                    SseEvent.Meta("session-1"),
+                    SseEvent.Delta("こん"),
+                    SseEvent.Delta("にちは"),
+                    SseEvent.Done("session-1"),
+                ),
+            )
+            val viewModel = ChatViewModel(repository, preferences)
+            advanceUntilIdle()
 
-        viewModel.updateInput("  質問  ")
-        viewModel.sendMessage()
-        advanceUntilIdle()
+            viewModel.updateInput("  質問  ")
+            viewModel.sendMessage()
+            advanceUntilIdle()
 
-        val state = viewModel.state.value
-        assertEquals(2, state.messages.size)
-        assertEquals(ChatRole.User, state.messages[0].role)
-        assertEquals("質問", state.messages[0].text)
-        assertEquals("こんにちは", state.messages[1].text)
-        assertFalse(state.isStreaming)
-        assertNull(state.error)
-        assertEquals("session-1", preferences.savedSessionId)
-        assertEquals(1, repository.requestCount)
-    }
+            val state = viewModel.state.value
+            assertEquals(3, state.messages.size)
+            assertEquals(ChatRole.User, state.messages[0].role)
+            assertEquals("質問", state.messages[0].text)
+            assertEquals(ChatRole.Assistant, state.messages[1].role)
+            assertEquals("こん", state.messages[1].text)
+            assertEquals(ChatRole.Assistant, state.messages[2].role)
+            assertEquals("にちは", state.messages[2].text)
+            assertFalse(state.isStreaming)
+            assertNull(state.error)
+            assertEquals("session-1", preferences.savedSessionId)
+            assertEquals(1, repository.requestCount)
+        }
 
     @Test
     fun streamErrorRestoresInputAndPreventsDuplicateSend() =
@@ -73,6 +77,8 @@ class ChatViewModelTest {
             assertEquals(1, repository.requestCount)
             assertEquals("サーバー失敗", viewModel.state.value.error)
             assertFalse(viewModel.state.value.isStreaming)
+            assertEquals(1, viewModel.state.value.messages.size)
+            assertEquals(ChatRole.User, viewModel.state.value.messages[0].role)
         }
 
     @Test
