@@ -1,5 +1,6 @@
 package com.example.cursortalkandroid.ui.chat
 
+import androidx.compose.foundation.layout.Column
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -20,21 +21,27 @@ class ChatScreenTest {
     fun displaysMessagesStreamingStateAndError() {
         composeRule.setContent {
             CursorTalkAndroidTheme {
-                ChatScreen(
-                    state = ChatUiState(
-                        messages = listOf(
-                            ChatMessage(1, ChatRole.User, "質問"),
-                            ChatMessage(2, ChatRole.Assistant, ""),
+                Column {
+                    ChatScreen(
+                        state = ChatUiState(
+                            messages = listOf(
+                                ChatMessage(1, ChatRole.User, "質問"),
+                                ChatMessage(2, ChatRole.Assistant, ""),
+                            ),
+                            input = "入力中",
+                            isStreaming = true,
+                            error = "接続エラー",
                         ),
+                        onDismissError = {},
+                        onSaveServerUrl = { true },
+                    )
+                    ChatInputBar(
                         input = "入力中",
                         isStreaming = true,
-                        error = "接続エラー",
-                    ),
-                    onInputChange = {},
-                    onSend = {},
-                    onDismissError = {},
-                    onSaveServerUrl = { true },
-                )
+                        onInputChange = {},
+                        onSend = {},
+                    )
+                }
             }
         }
 
@@ -57,8 +64,6 @@ class ChatScreenTest {
                         ),
                         isStreaming = true,
                     ),
-                    onInputChange = {},
-                    onSend = {},
                     onDismissError = {},
                     onSaveServerUrl = { true },
                 )
@@ -75,8 +80,6 @@ class ChatScreenTest {
             CursorTalkAndroidTheme {
                 ChatScreen(
                     state = ChatUiState(),
-                    onInputChange = {},
-                    onSend = {},
                     onDismissError = {},
                     onSaveServerUrl = { true },
                 )

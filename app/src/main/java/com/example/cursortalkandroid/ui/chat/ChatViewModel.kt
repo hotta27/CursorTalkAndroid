@@ -46,6 +46,7 @@ class ChatViewModel(
     private val preferences: ChatPreferencesStore,
     private val historyStore: ChatHistoryStore = EmptyChatHistoryStore,
     private val bookmarkStore: BookmarkStore = EmptyBookmarkStore,
+    private val nowMillis: () -> Long = System::currentTimeMillis,
 ) : ViewModel() {
     private val mutableState = MutableStateFlow(ChatUiState())
     val state: StateFlow<ChatUiState> = mutableState.asStateFlow()
@@ -53,6 +54,7 @@ class ChatViewModel(
     private val nextBookmarkId = AtomicLong(0)
     private var sessionId: String? = null
     private var historySaveJob: Job? = null
+    private var lastAssistantDeltaAtMs: Long? = null
     private val bookmarkPersistMutex = Mutex()
     private var lastPersistedBookmarks: List<Bookmark> = emptyList()
 
@@ -203,20 +205,21 @@ class ChatViewModel(
         if (text.isEmpty() || snapshot.isStreaming || snapshot.isLoadingHistory) return
 
         val userId = nextMessageId.incrementAndGet()
-        val assistantId = nextMessageId.incrementAndGet()
+        val typingPlaceholderId = nextMessageId.incrementAndGet()
         val userMessage = ChatMessage(
             id = userId,
             role = ChatRole.User,
             text = text,
         )
-        val assistantMessage = ChatMessage(
-            id = assistantId,
+        val typingPlaceholder = ChatMessage(
+            id = typingPlaceholderId,
             role = ChatRole.Assistant,
             text = "",
         )
+        lastAssistantDeltaAtMs = null
         mutableState.update {
             it.copy(
-                messages = it.messages + userMessage + assistantMessage,
+                messages = it.messages + userMessage + typingPlaceholder,
                 input = "",
                 isStreaming = true,
                 error = null,
@@ -229,7 +232,7 @@ class ChatViewModel(
                 repository.streamMessage(snapshot.serverUrl, text, sessionId).collect { event ->
                     when (event) {
                         is SseEvent.Meta -> storeSessionId(event.sessionId)
-                        is SseEvent.Delta -> appendAssistantText(assistantId, event.text)
+                        is SseEvent.Delta -> appendAssistantDelta(event.text)
                         is SseEvent.Done -> storeSessionId(event.sessionId)
                         is SseEvent.Error -> mutableState.update {
                             it.copy(error = event.message)
@@ -241,21 +244,48 @@ class ChatViewModel(
                     it.copy(error = exception.message ?: "応答の取得に失敗しました。")
                 }
             } finally {
-                mutableState.update { it.copy(isStreaming = false) }
+                lastAssistantDeltaAtMs = null
+                mutableState.update { current ->
+                    current.copy(
+                        messages = current.messages.withoutTrailingEmptyAssistant(),
+                        isStreaming = false,
+                    )
+                }
                 scheduleHistorySave(immediate = true)
             }
         }
     }
 
-    private fun appendAssistantText(messageId: Long, text: String) {
+    private fun appendAssistantDelta(text: String) {
+        if (text.isEmpty()) return
+        val now = nowMillis()
         mutableState.update { current ->
-            current.copy(
-                messages = current.messages.map { message ->
-                    if (message.id == messageId) message.copy(text = message.text + text) else message
-                },
-            )
+            val messages = current.messages.toMutableList()
+            val last = messages.lastOrNull()
+            val continueSameBubble = last != null &&
+                last.role == ChatRole.Assistant &&
+                (
+                    last.text.isEmpty() ||
+                        lastAssistantDeltaAtMs?.let { now - it < BUBBLE_SPLIT_GAP_MS } == true
+                    )
+            if (continueSameBubble) {
+                messages[messages.lastIndex] = last.copy(text = last.text + text)
+            } else {
+                messages += ChatMessage(
+                    id = nextMessageId.incrementAndGet(),
+                    role = ChatRole.Assistant,
+                    text = text,
+                )
+            }
+            current.copy(messages = messages)
         }
+        lastAssistantDeltaAtMs = now
         scheduleHistorySave()
+    }
+
+    private fun List<ChatMessage>.withoutTrailingEmptyAssistant(): List<ChatMessage> {
+        val last = lastOrNull() ?: return this
+        return if (last.role == ChatRole.Assistant && last.text.isEmpty()) dropLast(1) else this
     }
 
     private fun storeSessionId(value: String) {
@@ -292,5 +322,6 @@ class ChatViewModel(
 
     private companion object {
         const val HISTORY_SAVE_DEBOUNCE_MS = 250L
+        const val BUBBLE_SPLIT_GAP_MS = 3_000L
     }
 }

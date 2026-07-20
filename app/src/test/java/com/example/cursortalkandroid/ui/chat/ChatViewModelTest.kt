@@ -32,33 +32,66 @@ class ChatViewModelTest {
     val mainDispatcherRule = MainDispatcherRule()
 
     @Test
-    fun sendAppendsDeltasAndPersistsSession() = runTest(mainDispatcherRule.testDispatcher) {
-        val preferences = FakePreferences()
-        val repository = FakeRepository(
-            events = listOf(
-                SseEvent.Meta("session-1"),
-                SseEvent.Delta("こん"),
-                SseEvent.Delta("にちは"),
-                SseEvent.Done("session-1"),
-            ),
-        )
-        val viewModel = ChatViewModel(repository, preferences)
-        advanceUntilIdle()
+    fun sendMergesDeltasWithinGapAndPersistsSession() =
+        runTest(mainDispatcherRule.testDispatcher) {
+            val preferences = FakePreferences()
+            val repository = FakeRepository(
+                events = listOf(
+                    SseEvent.Meta("session-1"),
+                    SseEvent.Delta("こん"),
+                    SseEvent.Delta("にちは"),
+                    SseEvent.Done("session-1"),
+                ),
+            )
+            val viewModel = ChatViewModel(repository, preferences)
+            advanceUntilIdle()
 
-        viewModel.updateInput("  質問  ")
-        viewModel.sendMessage()
-        advanceUntilIdle()
+            viewModel.updateInput("  質問  ")
+            viewModel.sendMessage()
+            advanceUntilIdle()
 
-        val state = viewModel.state.value
-        assertEquals(2, state.messages.size)
-        assertEquals(ChatRole.User, state.messages[0].role)
-        assertEquals("質問", state.messages[0].text)
-        assertEquals("こんにちは", state.messages[1].text)
-        assertFalse(state.isStreaming)
-        assertNull(state.error)
-        assertEquals("session-1", preferences.savedSessionId)
-        assertEquals(1, repository.requestCount)
-    }
+            val state = viewModel.state.value
+            assertEquals(2, state.messages.size)
+            assertEquals(ChatRole.User, state.messages[0].role)
+            assertEquals("質問", state.messages[0].text)
+            assertEquals(ChatRole.Assistant, state.messages[1].role)
+            assertEquals("こんにちは", state.messages[1].text)
+            assertFalse(state.isStreaming)
+            assertNull(state.error)
+            assertEquals("session-1", preferences.savedSessionId)
+            assertEquals(1, repository.requestCount)
+        }
+
+    @Test
+    fun sendSplitsBubblesWhenDeltaGapIsAtLeastTenSeconds() =
+        runTest(mainDispatcherRule.testDispatcher) {
+            var clockMs = 0L
+            val preferences = FakePreferences()
+            val repository = FakeRepository(
+                events = listOf(
+                    SseEvent.Delta("最初"),
+                    SseEvent.Delta("次"),
+                ),
+                beforeEmit = { index, _ ->
+                    if (index == 1) clockMs = 10_000L
+                },
+            )
+            val viewModel = ChatViewModel(
+                repository = repository,
+                preferences = preferences,
+                nowMillis = { clockMs },
+            )
+            advanceUntilIdle()
+
+            viewModel.updateInput("質問")
+            viewModel.sendMessage()
+            advanceUntilIdle()
+
+            val state = viewModel.state.value
+            assertEquals(3, state.messages.size)
+            assertEquals("最初", state.messages[1].text)
+            assertEquals("次", state.messages[2].text)
+        }
 
     @Test
     fun streamErrorRestoresInputAndPreventsDuplicateSend() =
@@ -78,6 +111,8 @@ class ChatViewModelTest {
             assertEquals(1, repository.requestCount)
             assertEquals("サーバー失敗", viewModel.state.value.error)
             assertFalse(viewModel.state.value.isStreaming)
+            assertEquals(1, viewModel.state.value.messages.size)
+            assertEquals(ChatRole.User, viewModel.state.value.messages[0].role)
         }
 
     @Test
@@ -367,6 +402,7 @@ class ChatViewModelTest {
 
     private class FakeRepository(
         private val events: List<SseEvent>,
+        private val beforeEmit: (index: Int, event: SseEvent) -> Unit = { _, _ -> },
     ) : ChatRepository {
         var requestCount = 0
 
@@ -376,7 +412,10 @@ class ChatViewModelTest {
             sessionId: String?,
         ): Flow<SseEvent> = flow {
             requestCount++
-            events.forEach { emit(it) }
+            events.forEachIndexed { index, event ->
+                beforeEmit(index, event)
+                emit(event)
+            }
         }
     }
 

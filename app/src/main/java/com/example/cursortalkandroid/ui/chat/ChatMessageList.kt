@@ -1,6 +1,7 @@
 package com.example.cursortalkandroid.ui.chat
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -9,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.selection.LocalTextSelectionColors
@@ -20,10 +22,15 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.dp
 import com.example.cursortalkandroid.data.model.ChatMessage
 import com.example.cursortalkandroid.data.model.ChatRole
@@ -58,8 +65,9 @@ fun ChatMessageList(
         initialFirstVisibleItemIndex = messages.lastIndex.coerceAtLeast(0),
     )
     val latestText = messages.lastOrNull()?.text.orEmpty()
-    LaunchedEffect(messages.size, latestText) {
-        listState.scrollToItem(messages.lastIndex)
+    var latestBubbleHeightPx by remember { mutableIntStateOf(0) }
+    LaunchedEffect(messages.size, latestText, latestBubbleHeightPx) {
+        scrollToRevealLatestMessageBottom(listState, messages.lastIndex)
     }
 
     LazyColumn(
@@ -69,17 +77,52 @@ fun ChatMessageList(
         contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
     ) {
         items(messages, key = ChatMessage::id) { message ->
+            val isLatest = message.id == messages.last().id
             val isActivelyStreaming = isStreaming &&
                 message.role == ChatRole.Assistant &&
-                message == messages.last()
+                isLatest
             ChatBubble(
                 message = message,
                 showTyping = isActivelyStreaming && message.text.isEmpty(),
                 canBookmark = !isActivelyStreaming && message.text.isNotBlank(),
                 isBookmarked = message.id in bookmarkedSourceIds,
                 onToggleBookmark = { onToggleBookmark(message) },
+                modifier = if (isLatest) {
+                    Modifier.onSizeChanged { latestBubbleHeightPx = it.height }
+                } else {
+                    Modifier
+                },
             )
         }
+    }
+}
+
+/**
+ * Keeps the bottom of the latest message visible.
+ * [LazyListState.scrollToItem] alone only aligns the item's top, so a bubble
+ * taller than the viewport would still clip its growing bottom edge.
+ */
+private suspend fun scrollToRevealLatestMessageBottom(
+    listState: LazyListState,
+    lastIndex: Int,
+) {
+    if (lastIndex < 0) return
+
+    // Wait one frame so LazyColumn has measured the updated bubble height.
+    withFrameNanos { }
+
+    val layoutInfo = listState.layoutInfo
+    val lastItem = layoutInfo.visibleItemsInfo.find { it.index == lastIndex }
+    if (lastItem == null) {
+        listState.scrollToItem(lastIndex)
+        withFrameNanos { }
+    }
+
+    val settledInfo = listState.layoutInfo
+    val settledItem = settledInfo.visibleItemsInfo.find { it.index == lastIndex } ?: return
+    val overflow = (settledItem.offset + settledItem.size) - settledInfo.viewportEndOffset
+    if (overflow > 0) {
+        listState.scrollBy(overflow.toFloat())
     }
 }
 
@@ -90,6 +133,7 @@ private fun ChatBubble(
     canBookmark: Boolean,
     isBookmarked: Boolean,
     onToggleBookmark: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val isUser = message.role == ChatRole.User
     // primary と分離した専用色にし、選択ハイライトが同化しないようにする
@@ -119,7 +163,7 @@ private fun ChatBubble(
     }
 
     Column(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
     ) {
         Box(
