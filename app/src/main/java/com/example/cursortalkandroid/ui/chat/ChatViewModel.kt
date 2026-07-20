@@ -3,11 +3,14 @@ package com.example.cursortalkandroid.ui.chat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.cursortalkandroid.data.BookmarkStore
 import com.example.cursortalkandroid.data.ChatPreferences
 import com.example.cursortalkandroid.data.ChatPreferencesStore
 import com.example.cursortalkandroid.data.ChatHistoryStore
 import com.example.cursortalkandroid.data.ChatRepository
+import com.example.cursortalkandroid.data.EmptyBookmarkStore
 import com.example.cursortalkandroid.data.EmptyChatHistoryStore
+import com.example.cursortalkandroid.data.model.Bookmark
 import com.example.cursortalkandroid.data.model.ChatMessage
 import com.example.cursortalkandroid.data.model.ChatRole
 import com.example.cursortalkandroid.data.model.SseEvent
@@ -24,21 +27,27 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 data class ChatUiState(
     val messages: List<ChatMessage> = emptyList(),
+    val bookmarks: List<Bookmark> = emptyList(),
     val input: String = "",
     val isStreaming: Boolean = false,
     val isLoadingHistory: Boolean = true,
     val error: String? = null,
     val serverUrl: String = ChatPreferences.DEFAULT_SERVER_URL,
-)
+) {
+    val bookmarkedSourceIds: Set<Long>
+        get() = bookmarks.mapTo(mutableSetOf(), Bookmark::sourceMessageId)
+}
 
 class ChatViewModel(
     private val repository: ChatRepository,
     private val preferences: ChatPreferencesStore,
     private val historyStore: ChatHistoryStore = EmptyChatHistoryStore,
+    private val bookmarkStore: BookmarkStore = EmptyBookmarkStore,
 ) : ViewModel() {
     private val mutableState = MutableStateFlow(ChatUiState())
     val state: StateFlow<ChatUiState> = mutableState.asStateFlow()
     private val nextMessageId = AtomicLong(0)
+    private val nextBookmarkId = AtomicLong(0)
     private var sessionId: String? = null
     private var historySaveJob: Job? = null
 
@@ -47,9 +56,15 @@ class ChatViewModel(
             try {
                 sessionId = preferences.sessionId.first()
                 val messages = historyStore.loadMessages()
+                val bookmarks = bookmarkStore.loadBookmarks()
                 nextMessageId.set(messages.maxOfOrNull(ChatMessage::id) ?: 0)
+                nextBookmarkId.set(bookmarks.maxOfOrNull(Bookmark::id) ?: 0)
                 mutableState.update {
-                    it.copy(messages = messages, isLoadingHistory = false)
+                    it.copy(
+                        messages = messages,
+                        bookmarks = bookmarks,
+                        isLoadingHistory = false,
+                    )
                 }
             } catch (_: Exception) {
                 mutableState.update {
@@ -73,6 +88,44 @@ class ChatViewModel(
 
     fun dismissError() {
         mutableState.update { it.copy(error = null) }
+    }
+
+    fun toggleBookmark(message: ChatMessage) {
+        if (message.text.isBlank()) return
+
+        val current = mutableState.value.bookmarks
+        val existing = current.firstOrNull { it.sourceMessageId == message.id }
+        val updated = if (existing != null) {
+            current - existing
+        } else {
+            current + Bookmark(
+                id = nextBookmarkId.incrementAndGet(),
+                sourceMessageId = message.id,
+                role = message.role,
+                text = message.text,
+                savedAt = System.currentTimeMillis(),
+            )
+        }
+        mutableState.update { it.copy(bookmarks = updated) }
+        persistBookmarks(updated)
+    }
+
+    fun removeBookmark(bookmarkId: Long) {
+        val updated = mutableState.value.bookmarks.filterNot { it.id == bookmarkId }
+        mutableState.update { it.copy(bookmarks = updated) }
+        persistBookmarks(updated)
+    }
+
+    private fun persistBookmarks(bookmarks: List<Bookmark>) {
+        viewModelScope.launch {
+            try {
+                bookmarkStore.saveBookmarks(bookmarks)
+            } catch (_: Exception) {
+                mutableState.update {
+                    it.copy(error = "ブックマークを端末へ保存できませんでした。")
+                }
+            }
+        }
     }
 
     fun saveServerUrl(rawUrl: String): Boolean {
@@ -176,11 +229,12 @@ class ChatViewModel(
         private val repository: ChatRepository,
         private val preferences: ChatPreferencesStore,
         private val historyStore: ChatHistoryStore,
+        private val bookmarkStore: BookmarkStore = EmptyBookmarkStore,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             require(modelClass.isAssignableFrom(ChatViewModel::class.java))
-            return ChatViewModel(repository, preferences, historyStore) as T
+            return ChatViewModel(repository, preferences, historyStore, bookmarkStore) as T
         }
     }
 

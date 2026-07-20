@@ -1,10 +1,12 @@
 package com.example.cursortalkandroid.ui.chat
 
 import com.example.cursortalkandroid.MainDispatcherRule
+import com.example.cursortalkandroid.data.BookmarkStore
 import com.example.cursortalkandroid.data.ChatPreferences
 import com.example.cursortalkandroid.data.ChatPreferencesStore
 import com.example.cursortalkandroid.data.ChatHistoryStore
 import com.example.cursortalkandroid.data.ChatRepository
+import com.example.cursortalkandroid.data.model.Bookmark
 import com.example.cursortalkandroid.data.model.ChatMessage
 import com.example.cursortalkandroid.data.model.ChatRole
 import com.example.cursortalkandroid.data.model.SseEvent
@@ -114,6 +116,78 @@ class ChatViewModelTest {
             assertEquals("新しい回答", historyStore.savedMessages.last().text)
         }
 
+    @Test
+    fun toggleBookmarkAddsThenRemovesAndPersists() =
+        runTest(mainDispatcherRule.testDispatcher) {
+            val bookmarkStore = FakeBookmarkStore()
+            val viewModel = ChatViewModel(
+                repository = FakeRepository(emptyList()),
+                preferences = FakePreferences(),
+                bookmarkStore = bookmarkStore,
+            )
+            advanceUntilIdle()
+
+            val message = ChatMessage(5, ChatRole.Assistant, "保存したい回答")
+
+            viewModel.toggleBookmark(message)
+            advanceUntilIdle()
+
+            var state = viewModel.state.value
+            assertEquals(1, state.bookmarks.size)
+            assertEquals("保存したい回答", state.bookmarks.first().text)
+            assertEquals(5L, state.bookmarks.first().sourceMessageId)
+            assertTrue(5L in state.bookmarkedSourceIds)
+            assertEquals(1, bookmarkStore.savedBookmarks.size)
+
+            viewModel.toggleBookmark(message)
+            advanceUntilIdle()
+
+            state = viewModel.state.value
+            assertTrue(state.bookmarks.isEmpty())
+            assertFalse(5L in state.bookmarkedSourceIds)
+            assertTrue(bookmarkStore.savedBookmarks.isEmpty())
+        }
+
+    @Test
+    fun toggleBookmarkIgnoresBlankMessages() =
+        runTest(mainDispatcherRule.testDispatcher) {
+            val viewModel = ChatViewModel(
+                repository = FakeRepository(emptyList()),
+                preferences = FakePreferences(),
+                bookmarkStore = FakeBookmarkStore(),
+            )
+            advanceUntilIdle()
+
+            viewModel.toggleBookmark(ChatMessage(1, ChatRole.Assistant, "   "))
+            advanceUntilIdle()
+
+            assertTrue(viewModel.state.value.bookmarks.isEmpty())
+        }
+
+    @Test
+    fun restoresPersistedBookmarksAndRemovesById() =
+        runTest(mainDispatcherRule.testDispatcher) {
+            val initial = listOf(
+                Bookmark(1, 10, ChatRole.User, "質問メモ", 100L),
+                Bookmark(2, 11, ChatRole.Assistant, "回答メモ", 200L),
+            )
+            val bookmarkStore = FakeBookmarkStore(initial)
+            val viewModel = ChatViewModel(
+                repository = FakeRepository(emptyList()),
+                preferences = FakePreferences(),
+                bookmarkStore = bookmarkStore,
+            )
+            advanceUntilIdle()
+
+            assertEquals(initial, viewModel.state.value.bookmarks)
+
+            viewModel.removeBookmark(1)
+            advanceUntilIdle()
+
+            assertEquals(listOf(initial[1]), viewModel.state.value.bookmarks)
+            assertEquals(listOf(initial[1]), bookmarkStore.savedBookmarks)
+        }
+
     private class FakeRepository(
         private val events: List<SseEvent>,
     ) : ChatRepository {
@@ -161,6 +235,18 @@ class ChatViewModelTest {
 
         override suspend fun saveMessages(messages: List<ChatMessage>) {
             savedMessages = messages
+        }
+    }
+
+    private class FakeBookmarkStore(
+        private val initialBookmarks: List<Bookmark> = emptyList(),
+    ) : BookmarkStore {
+        var savedBookmarks: List<Bookmark> = initialBookmarks
+
+        override suspend fun loadBookmarks(): List<Bookmark> = initialBookmarks
+
+        override suspend fun saveBookmarks(bookmarks: List<Bookmark>) {
+            savedBookmarks = bookmarks
         }
     }
 }
