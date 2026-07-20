@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.HorizontalDivider
@@ -110,32 +111,47 @@ private fun InlineMarkdownText(
 @Composable
 private fun MarkdownTable(rows: List<List<String>>, color: Color) {
     val borderColor = MaterialTheme.colorScheme.outline
+    // horizontalScroll 配下は幅が無限制約になるため、内側を IntrinsicSize.Max で
+    // 最広行に揃えないと HorizontalDivider の fillMaxWidth が 0 幅になる。
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .border(1.dp, borderColor)
-            .background(MaterialTheme.colorScheme.surfaceVariant),
+            .horizontalScroll(rememberScrollState()),
     ) {
-        rows.forEachIndexed { rowIndex, row ->
-            if (rowIndex > 0) {
-                HorizontalDivider(color = borderColor, thickness = 1.dp)
-            }
-            Row(modifier = Modifier.height(IntrinsicSize.Min)) {
-                row.forEachIndexed { cellIndex, cell ->
-                    if (cellIndex > 0) {
-                        VerticalDivider(color = borderColor, thickness = 1.dp)
-                    }
-                    InlineMarkdownText(
-                        text = cell,
-                        color = color,
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            fontWeight = if (rowIndex == 0) FontWeight.Bold else FontWeight.Normal,
-                        ),
-                        modifier = Modifier
-                            .widthIn(min = 96.dp, max = 240.dp)
-                            .padding(horizontal = 8.dp, vertical = 6.dp),
+        Column(
+            modifier = Modifier
+                .width(IntrinsicSize.Max)
+                .border(1.dp, borderColor)
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+        ) {
+            rows.forEachIndexed { rowIndex, row ->
+                if (rowIndex > 0) {
+                    HorizontalDivider(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = borderColor,
+                        thickness = 1.dp,
                     )
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(IntrinsicSize.Min),
+                ) {
+                    row.forEachIndexed { cellIndex, cell ->
+                        if (cellIndex > 0) {
+                            VerticalDivider(color = borderColor, thickness = 1.dp)
+                        }
+                        InlineMarkdownText(
+                            text = cell,
+                            color = color,
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontWeight = if (rowIndex == 0) FontWeight.Bold else FontWeight.Normal,
+                            ),
+                            modifier = Modifier
+                                .widthIn(min = 96.dp, max = 240.dp)
+                                .padding(horizontal = 8.dp, vertical = 6.dp),
+                        )
+                    }
                 }
             }
         }
