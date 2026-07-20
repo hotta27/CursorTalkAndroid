@@ -40,10 +40,13 @@ fun ChatMessageList(
         return
     }
 
-    val listState = rememberLazyListState()
+    // 起動時・履歴復元時は先頭からアニメーションせず、最新メッセージ位置へ即ジャンプする
+    val listState = rememberLazyListState(
+        initialFirstVisibleItemIndex = messages.lastIndex.coerceAtLeast(0),
+    )
     val latestText = messages.lastOrNull()?.text.orEmpty()
     LaunchedEffect(messages.size, latestText) {
-        listState.animateScrollToItem(messages.lastIndex)
+        listState.scrollToItem(messages.lastIndex)
     }
 
     LazyColumn(
