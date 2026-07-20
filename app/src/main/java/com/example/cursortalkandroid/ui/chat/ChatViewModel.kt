@@ -35,12 +35,14 @@ class ChatViewModel(
     private val repository: ChatRepository,
     private val preferences: ChatPreferencesStore,
     private val historyStore: ChatHistoryStore = EmptyChatHistoryStore,
+    private val nowMillis: () -> Long = System::currentTimeMillis,
 ) : ViewModel() {
     private val mutableState = MutableStateFlow(ChatUiState())
     val state: StateFlow<ChatUiState> = mutableState.asStateFlow()
     private val nextMessageId = AtomicLong(0)
     private var sessionId: String? = null
     private var historySaveJob: Job? = null
+    private var lastAssistantDeltaAtMs: Long? = null
 
     init {
         viewModelScope.launch {
@@ -109,6 +111,7 @@ class ChatViewModel(
             role = ChatRole.Assistant,
             text = "",
         )
+        lastAssistantDeltaAtMs = null
         mutableState.update {
             it.copy(
                 messages = it.messages + userMessage + typingPlaceholder,
@@ -136,6 +139,7 @@ class ChatViewModel(
                     it.copy(error = exception.message ?: "応答の取得に失敗しました。")
                 }
             } finally {
+                lastAssistantDeltaAtMs = null
                 mutableState.update { current ->
                     current.copy(
                         messages = current.messages.withoutTrailingEmptyAssistant(),
@@ -149,11 +153,18 @@ class ChatViewModel(
 
     private fun appendAssistantDelta(text: String) {
         if (text.isEmpty()) return
+        val now = nowMillis()
         mutableState.update { current ->
             val messages = current.messages.toMutableList()
             val last = messages.lastOrNull()
-            if (last != null && last.role == ChatRole.Assistant && last.text.isEmpty()) {
-                messages[messages.lastIndex] = last.copy(text = text)
+            val continueSameBubble = last != null &&
+                last.role == ChatRole.Assistant &&
+                (
+                    last.text.isEmpty() ||
+                        lastAssistantDeltaAtMs?.let { now - it < BUBBLE_SPLIT_GAP_MS } == true
+                    )
+            if (continueSameBubble) {
+                messages[messages.lastIndex] = last.copy(text = last.text + text)
             } else {
                 messages += ChatMessage(
                     id = nextMessageId.incrementAndGet(),
@@ -163,6 +174,7 @@ class ChatViewModel(
             }
             current.copy(messages = messages)
         }
+        lastAssistantDeltaAtMs = now
         scheduleHistorySave()
     }
 
@@ -204,5 +216,6 @@ class ChatViewModel(
 
     private companion object {
         const val HISTORY_SAVE_DEBOUNCE_MS = 250L
+        const val BUBBLE_SPLIT_GAP_MS = 3_000L
     }
 }
