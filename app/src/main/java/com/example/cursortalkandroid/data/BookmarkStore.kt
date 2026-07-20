@@ -14,12 +14,19 @@ import kotlinx.coroutines.withContext
 
 interface BookmarkStore {
     suspend fun loadBookmarks(): List<Bookmark>
-    suspend fun saveBookmarks(bookmarks: List<Bookmark>)
+
+    /** Persists bookmarks and returns the list actually retained on disk. */
+    suspend fun saveBookmarks(bookmarks: List<Bookmark>): List<Bookmark>
+
+    companion object {
+        const val MAX_BOOKMARKS = 500
+    }
 }
 
 object EmptyBookmarkStore : BookmarkStore {
     override suspend fun loadBookmarks(): List<Bookmark> = emptyList()
-    override suspend fun saveBookmarks(bookmarks: List<Bookmark>) = Unit
+    override suspend fun saveBookmarks(bookmarks: List<Bookmark>): List<Bookmark> =
+        bookmarks.takeLast(BookmarkStore.MAX_BOOKMARKS)
 }
 
 class FileBookmarkStore(
@@ -34,7 +41,9 @@ class FileBookmarkStore(
             DataInputStream(BufferedInputStream(file.openRead())).use { input ->
                 if (input.readInt() != FILE_MAGIC) throw IOException("Unsupported bookmark format")
                 val count = input.readInt()
-                if (count !in 0..MAX_BOOKMARKS) throw IOException("Invalid bookmark count")
+                if (count !in 0..BookmarkStore.MAX_BOOKMARKS) {
+                    throw IOException("Invalid bookmark count")
+                }
 
                 List(count) {
                     val id = input.readLong()
@@ -65,36 +74,37 @@ class FileBookmarkStore(
         }
     }
 
-    override suspend fun saveBookmarks(bookmarks: List<Bookmark>) = withContext(Dispatchers.IO) {
-        val retained = bookmarks.takeLast(MAX_BOOKMARKS)
-        val outputStream = file.startWrite()
-        try {
-            val output = DataOutputStream(BufferedOutputStream(outputStream))
-            output.writeInt(FILE_MAGIC)
-            output.writeInt(retained.size)
-            retained.forEach { bookmark ->
-                val textBytes = bookmark.text.toByteArray(Charsets.UTF_8)
-                if (textBytes.size > MAX_MESSAGE_BYTES) {
-                    throw IOException("Bookmark is too large to persist")
+    override suspend fun saveBookmarks(bookmarks: List<Bookmark>): List<Bookmark> =
+        withContext(Dispatchers.IO) {
+            val retained = bookmarks.takeLast(BookmarkStore.MAX_BOOKMARKS)
+            val outputStream = file.startWrite()
+            try {
+                val output = DataOutputStream(BufferedOutputStream(outputStream))
+                output.writeInt(FILE_MAGIC)
+                output.writeInt(retained.size)
+                retained.forEach { bookmark ->
+                    val textBytes = bookmark.text.toByteArray(Charsets.UTF_8)
+                    if (textBytes.size > MAX_MESSAGE_BYTES) {
+                        throw IOException("Bookmark is too large to persist")
+                    }
+                    output.writeLong(bookmark.id)
+                    output.writeLong(bookmark.sourceMessageId)
+                    output.writeByte(if (bookmark.role == ChatRole.User) 0 else 1)
+                    output.writeLong(bookmark.savedAt)
+                    output.writeInt(textBytes.size)
+                    output.write(textBytes)
                 }
-                output.writeLong(bookmark.id)
-                output.writeLong(bookmark.sourceMessageId)
-                output.writeByte(if (bookmark.role == ChatRole.User) 0 else 1)
-                output.writeLong(bookmark.savedAt)
-                output.writeInt(textBytes.size)
-                output.write(textBytes)
+                output.flush()
+                file.finishWrite(outputStream)
+                retained
+            } catch (exception: Exception) {
+                file.failWrite(outputStream)
+                throw exception
             }
-            output.flush()
-            file.finishWrite(outputStream)
-        } catch (exception: Exception) {
-            file.failWrite(outputStream)
-            throw exception
         }
-    }
 
     private companion object {
         const val FILE_MAGIC = 0x43544231
-        const val MAX_BOOKMARKS = 500
         const val MAX_MESSAGE_BYTES = 4 * 1024 * 1024
     }
 }

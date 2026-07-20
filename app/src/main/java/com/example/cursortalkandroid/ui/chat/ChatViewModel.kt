@@ -15,6 +15,7 @@ import com.example.cursortalkandroid.data.model.ChatMessage
 import com.example.cursortalkandroid.data.model.ChatRole
 import com.example.cursortalkandroid.data.model.SseEvent
 import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -23,6 +24,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 data class ChatUiState(
@@ -50,29 +53,50 @@ class ChatViewModel(
     private val nextBookmarkId = AtomicLong(0)
     private var sessionId: String? = null
     private var historySaveJob: Job? = null
+    private val bookmarkPersistMutex = Mutex()
+    private var lastPersistedBookmarks: List<Bookmark> = emptyList()
 
     init {
         viewModelScope.launch {
+            var messages = emptyList<ChatMessage>()
+            var bookmarks = emptyList<Bookmark>()
+            var historyError: String? = null
+            var bookmarkError: String? = null
+
             try {
                 sessionId = preferences.sessionId.first()
-                val messages = historyStore.loadMessages()
-                val bookmarks = bookmarkStore.loadBookmarks()
-                nextMessageId.set(messages.maxOfOrNull(ChatMessage::id) ?: 0)
-                nextBookmarkId.set(bookmarks.maxOfOrNull(Bookmark::id) ?: 0)
-                mutableState.update {
-                    it.copy(
-                        messages = messages,
-                        bookmarks = bookmarks,
-                        isLoadingHistory = false,
-                    )
-                }
+            } catch (exception: CancellationException) {
+                throw exception
             } catch (_: Exception) {
-                mutableState.update {
-                    it.copy(
-                        isLoadingHistory = false,
-                        error = "保存した会話を読み込めませんでした。",
-                    )
-                }
+                // sessionId が取れなくても履歴・ブックマークの読み込みは続行する
+            }
+
+            try {
+                messages = historyStore.loadMessages()
+                nextMessageId.set(messages.maxOfOrNull(ChatMessage::id) ?: 0)
+            } catch (exception: CancellationException) {
+                throw exception
+            } catch (_: Exception) {
+                historyError = "保存した会話を読み込めませんでした。"
+            }
+
+            try {
+                bookmarks = bookmarkStore.loadBookmarks()
+                nextBookmarkId.set(bookmarks.maxOfOrNull(Bookmark::id) ?: 0)
+                lastPersistedBookmarks = bookmarks
+            } catch (exception: CancellationException) {
+                throw exception
+            } catch (_: Exception) {
+                bookmarkError = "保存したブックマークを読み込めませんでした。"
+            }
+
+            mutableState.update {
+                it.copy(
+                    messages = messages,
+                    bookmarks = bookmarks,
+                    isLoadingHistory = false,
+                    error = historyError ?: bookmarkError,
+                )
             }
         }
         viewModelScope.launch {
@@ -91,38 +115,66 @@ class ChatViewModel(
     }
 
     fun toggleBookmark(message: ChatMessage) {
-        if (message.text.isBlank()) return
+        val snapshot = mutableState.value
+        val source = snapshot.messages.firstOrNull { it.id == message.id } ?: message
+        if (source.text.isBlank() || isActivelyStreamingMessage(snapshot, source.id)) return
 
-        val current = mutableState.value.bookmarks
-        val existing = current.firstOrNull { it.sourceMessageId == message.id }
+        val current = snapshot.bookmarks
+        val existing = current.firstOrNull { it.sourceMessageId == source.id }
         val updated = if (existing != null) {
             current - existing
         } else {
-            current + Bookmark(
+            (current + Bookmark(
                 id = nextBookmarkId.incrementAndGet(),
-                sourceMessageId = message.id,
-                role = message.role,
-                text = message.text,
+                sourceMessageId = source.id,
+                role = source.role,
+                text = source.text,
                 savedAt = System.currentTimeMillis(),
-            )
+            )).takeLast(BookmarkStore.MAX_BOOKMARKS)
         }
         mutableState.update { it.copy(bookmarks = updated) }
-        persistBookmarks(updated)
+        persistBookmarks()
     }
 
     fun removeBookmark(bookmarkId: Long) {
         val updated = mutableState.value.bookmarks.filterNot { it.id == bookmarkId }
         mutableState.update { it.copy(bookmarks = updated) }
-        persistBookmarks(updated)
+        persistBookmarks()
     }
 
-    private fun persistBookmarks(bookmarks: List<Bookmark>) {
+    private fun isActivelyStreamingMessage(state: ChatUiState, messageId: Long): Boolean {
+        if (!state.isStreaming) return false
+        val last = state.messages.lastOrNull() ?: return false
+        return last.id == messageId && last.role == ChatRole.Assistant
+    }
+
+    private fun persistBookmarks() {
         viewModelScope.launch {
-            try {
-                bookmarkStore.saveBookmarks(bookmarks)
-            } catch (_: Exception) {
-                mutableState.update {
-                    it.copy(error = "ブックマークを端末へ保存できませんでした。")
+            bookmarkPersistMutex.withLock {
+                val toSave = mutableState.value.bookmarks
+                try {
+                    val retained = bookmarkStore.saveBookmarks(toSave)
+                    lastPersistedBookmarks = retained
+                    mutableState.update { current ->
+                        if (current.bookmarks == toSave) {
+                            current.copy(bookmarks = retained)
+                        } else {
+                            current
+                        }
+                    }
+                } catch (exception: CancellationException) {
+                    throw exception
+                } catch (_: Exception) {
+                    mutableState.update { current ->
+                        if (current.bookmarks == toSave) {
+                            current.copy(
+                                bookmarks = lastPersistedBookmarks,
+                                error = "ブックマークを端末へ保存できませんでした。",
+                            )
+                        } else {
+                            current.copy(error = "ブックマークを端末へ保存できませんでした。")
+                        }
+                    }
                 }
             }
         }

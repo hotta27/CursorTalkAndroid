@@ -10,10 +10,13 @@ import com.example.cursortalkandroid.data.model.Bookmark
 import com.example.cursortalkandroid.data.model.ChatMessage
 import com.example.cursortalkandroid.data.model.ChatRole
 import com.example.cursortalkandroid.data.model.SseEvent
+import java.io.IOException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -117,6 +120,55 @@ class ChatViewModelTest {
         }
 
     @Test
+    fun loadsBookmarksEvenWhenHistoryLoadFails() =
+        runTest(mainDispatcherRule.testDispatcher) {
+            val bookmarks = listOf(
+                Bookmark(1, 10, ChatRole.Assistant, "残したいメモ", 100L),
+            )
+            val viewModel = ChatViewModel(
+                repository = FakeRepository(emptyList()),
+                preferences = FakePreferences(),
+                historyStore = object : ChatHistoryStore {
+                    override suspend fun loadMessages(): List<ChatMessage> {
+                        throw IOException("history corrupt")
+                    }
+
+                    override suspend fun saveMessages(messages: List<ChatMessage>) = Unit
+                },
+                bookmarkStore = FakeBookmarkStore(bookmarks),
+            )
+            advanceUntilIdle()
+
+            assertEquals(bookmarks, viewModel.state.value.bookmarks)
+            assertTrue(viewModel.state.value.messages.isEmpty())
+            assertEquals("保存した会話を読み込めませんでした。", viewModel.state.value.error)
+        }
+
+    @Test
+    fun loadsHistoryEvenWhenBookmarkLoadFails() =
+        runTest(mainDispatcherRule.testDispatcher) {
+            val messages = listOf(ChatMessage(10, ChatRole.User, "以前の質問"))
+            val viewModel = ChatViewModel(
+                repository = FakeRepository(emptyList()),
+                preferences = FakePreferences(),
+                historyStore = FakeHistoryStore(messages),
+                bookmarkStore = object : BookmarkStore {
+                    override suspend fun loadBookmarks(): List<Bookmark> {
+                        throw IOException("bookmarks corrupt")
+                    }
+
+                    override suspend fun saveBookmarks(bookmarks: List<Bookmark>): List<Bookmark> =
+                        bookmarks
+                },
+            )
+            advanceUntilIdle()
+
+            assertEquals(messages, viewModel.state.value.messages)
+            assertTrue(viewModel.state.value.bookmarks.isEmpty())
+            assertEquals("保存したブックマークを読み込めませんでした。", viewModel.state.value.error)
+        }
+
+    @Test
     fun toggleBookmarkAddsThenRemovesAndPersists() =
         runTest(mainDispatcherRule.testDispatcher) {
             val bookmarkStore = FakeBookmarkStore()
@@ -188,6 +240,131 @@ class ChatViewModelTest {
             assertEquals(listOf(initial[1]), bookmarkStore.savedBookmarks)
         }
 
+    @Test
+    fun toggleBookmarkRollsBackUiWhenPersistFails() =
+        runTest(mainDispatcherRule.testDispatcher) {
+            val bookmarkStore = FailingBookmarkStore()
+            val viewModel = ChatViewModel(
+                repository = FakeRepository(emptyList()),
+                preferences = FakePreferences(),
+                bookmarkStore = bookmarkStore,
+            )
+            advanceUntilIdle()
+
+            viewModel.toggleBookmark(ChatMessage(5, ChatRole.Assistant, "保存したい回答"))
+            advanceUntilIdle()
+
+            val state = viewModel.state.value
+            assertTrue(state.bookmarks.isEmpty())
+            assertEquals("ブックマークを端末へ保存できませんでした。", state.error)
+        }
+
+    @Test
+    fun rapidBookmarkTogglePersistsLatestState() =
+        runTest(mainDispatcherRule.testDispatcher) {
+            val firstSaveStarted = CompletableDeferred<Unit>()
+            val allowFirstSave = CompletableDeferred<Unit>()
+            val bookmarkStore = ControllableBookmarkStore(firstSaveStarted, allowFirstSave)
+            val viewModel = ChatViewModel(
+                repository = FakeRepository(emptyList()),
+                preferences = FakePreferences(),
+                bookmarkStore = bookmarkStore,
+            )
+            advanceUntilIdle()
+
+            val message = ChatMessage(5, ChatRole.Assistant, "保存したい回答")
+            viewModel.toggleBookmark(message)
+
+            val waiter = launch { firstSaveStarted.await() }
+            advanceUntilIdle()
+            assertTrue(waiter.isCompleted)
+
+            viewModel.toggleBookmark(message)
+            allowFirstSave.complete(Unit)
+            advanceUntilIdle()
+
+            assertTrue(viewModel.state.value.bookmarks.isEmpty())
+            assertTrue(bookmarkStore.savedBookmarks.isEmpty())
+        }
+
+    @Test
+    fun toggleBookmarkIgnoresActivelyStreamingAssistantMessage() =
+        runTest(mainDispatcherRule.testDispatcher) {
+            val continueStream = CompletableDeferred<Unit>()
+            val bookmarkStore = FakeBookmarkStore()
+            val viewModel = ChatViewModel(
+                repository = object : ChatRepository {
+                    override fun streamMessage(
+                        baseUrl: String,
+                        message: String,
+                        sessionId: String?,
+                    ): Flow<SseEvent> = flow {
+                        emit(SseEvent.Delta("途中"))
+                        continueStream.await()
+                        emit(SseEvent.Delta("完了"))
+                        emit(SseEvent.Done("session-1"))
+                    }
+                },
+                preferences = FakePreferences(),
+                bookmarkStore = bookmarkStore,
+            )
+            advanceUntilIdle()
+
+            viewModel.updateInput("質問")
+            viewModel.sendMessage()
+            advanceUntilIdle()
+
+            assertTrue(viewModel.state.value.isStreaming)
+            val streamingMessage = viewModel.state.value.messages.last()
+            assertEquals("途中", streamingMessage.text)
+
+            viewModel.toggleBookmark(streamingMessage)
+            advanceUntilIdle()
+
+            assertTrue(viewModel.state.value.bookmarks.isEmpty())
+            assertTrue(bookmarkStore.savedBookmarks.isEmpty())
+
+            continueStream.complete(Unit)
+            advanceUntilIdle()
+
+            assertFalse(viewModel.state.value.isStreaming)
+            viewModel.toggleBookmark(viewModel.state.value.messages.last())
+            advanceUntilIdle()
+
+            assertEquals(1, viewModel.state.value.bookmarks.size)
+            assertEquals("途中完了", viewModel.state.value.bookmarks.first().text)
+        }
+
+    @Test
+    fun toggleBookmarkCapsToMaxAndKeepsUiInSync() =
+        runTest(mainDispatcherRule.testDispatcher) {
+            val initial = List(BookmarkStore.MAX_BOOKMARKS) { index ->
+                Bookmark(
+                    id = index.toLong() + 1,
+                    sourceMessageId = index.toLong() + 1000,
+                    role = ChatRole.Assistant,
+                    text = "bookmark-$index",
+                    savedAt = index.toLong(),
+                )
+            }
+            val bookmarkStore = FakeBookmarkStore(initial)
+            val viewModel = ChatViewModel(
+                repository = FakeRepository(emptyList()),
+                preferences = FakePreferences(),
+                bookmarkStore = bookmarkStore,
+            )
+            advanceUntilIdle()
+
+            viewModel.toggleBookmark(ChatMessage(9999, ChatRole.User, "新しいメモ"))
+            advanceUntilIdle()
+
+            val state = viewModel.state.value
+            assertEquals(BookmarkStore.MAX_BOOKMARKS, state.bookmarks.size)
+            assertEquals("新しいメモ", state.bookmarks.last().text)
+            assertEquals(initial.first().id + 1, state.bookmarks.first().id)
+            assertEquals(state.bookmarks, bookmarkStore.savedBookmarks)
+        }
+
     private class FakeRepository(
         private val events: List<SseEvent>,
     ) : ChatRepository {
@@ -245,8 +422,37 @@ class ChatViewModelTest {
 
         override suspend fun loadBookmarks(): List<Bookmark> = initialBookmarks
 
-        override suspend fun saveBookmarks(bookmarks: List<Bookmark>) {
-            savedBookmarks = bookmarks
+        override suspend fun saveBookmarks(bookmarks: List<Bookmark>): List<Bookmark> {
+            savedBookmarks = bookmarks.takeLast(BookmarkStore.MAX_BOOKMARKS)
+            return savedBookmarks
+        }
+    }
+
+    private class FailingBookmarkStore : BookmarkStore {
+        override suspend fun loadBookmarks(): List<Bookmark> = emptyList()
+
+        override suspend fun saveBookmarks(bookmarks: List<Bookmark>): List<Bookmark> {
+            throw IOException("disk full")
+        }
+    }
+
+    private class ControllableBookmarkStore(
+        private val firstSaveStarted: CompletableDeferred<Unit>,
+        private val allowFirstSave: CompletableDeferred<Unit>,
+    ) : BookmarkStore {
+        var savedBookmarks: List<Bookmark> = emptyList()
+        private var saveCount = 0
+
+        override suspend fun loadBookmarks(): List<Bookmark> = emptyList()
+
+        override suspend fun saveBookmarks(bookmarks: List<Bookmark>): List<Bookmark> {
+            saveCount++
+            if (saveCount == 1) {
+                firstSaveStarted.complete(Unit)
+                allowFirstSave.await()
+            }
+            savedBookmarks = bookmarks.takeLast(BookmarkStore.MAX_BOOKMARKS)
+            return savedBookmarks
         }
     }
 }

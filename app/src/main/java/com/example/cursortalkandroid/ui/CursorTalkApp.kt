@@ -60,6 +60,8 @@ fun CursorTalkApp(
                 AppTab.Bookmarks -> BookmarkScreen(
                     bookmarks = state.bookmarks,
                     onRemoveBookmark = onRemoveBookmark,
+                    error = state.error,
+                    onDismissError = onDismissError,
                 )
 
                 AppTab.Chat -> ChatScreen(

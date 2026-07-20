@@ -56,12 +56,13 @@ fun ChatMessageList(
         contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
     ) {
         items(messages, key = ChatMessage::id) { message ->
+            val isActivelyStreaming = isStreaming &&
+                message.role == ChatRole.Assistant &&
+                message == messages.last()
             ChatBubble(
                 message = message,
-                showTyping = isStreaming &&
-                    message.role == ChatRole.Assistant &&
-                    message == messages.last() &&
-                    message.text.isEmpty(),
+                showTyping = isActivelyStreaming && message.text.isEmpty(),
+                canBookmark = !isActivelyStreaming && message.text.isNotBlank(),
                 isBookmarked = message.id in bookmarkedSourceIds,
                 onToggleBookmark = { onToggleBookmark(message) },
             )
@@ -73,6 +74,7 @@ fun ChatMessageList(
 private fun ChatBubble(
     message: ChatMessage,
     showTyping: Boolean,
+    canBookmark: Boolean,
     isBookmarked: Boolean,
     onToggleBookmark: () -> Unit,
 ) {
@@ -111,7 +113,7 @@ private fun ChatBubble(
                 }
             }
         }
-        if (!showTyping && message.text.isNotBlank()) {
+        if (canBookmark) {
             TextButton(onClick = onToggleBookmark) {
                 Text(if (isBookmarked) "★ 保存済み" else "☆ ブックマーク")
             }

@@ -15,6 +15,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -33,39 +34,62 @@ fun BookmarkScreen(
     bookmarks: List<Bookmark>,
     onRemoveBookmark: (Long) -> Unit,
     modifier: Modifier = Modifier,
+    error: String? = null,
+    onDismissError: () -> Unit = {},
 ) {
     Scaffold(
         modifier = modifier.fillMaxSize(),
         topBar = { TopAppBar(title = { Text("ブックマーク") }) },
     ) { innerPadding ->
-        if (bookmarks.isEmpty()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = "ブックマークはまだありません。\nチャットの下の「☆ ブックマーク」から保存できます。",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(24.dp),
-                )
-            }
-            return@Scaffold
-        }
-
-        LazyColumn(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-            contentPadding = PaddingValues(12.dp),
         ) {
-            items(bookmarks, key = Bookmark::id) { bookmark ->
-                BookmarkCard(
-                    bookmark = bookmark,
-                    onRemove = { onRemoveBookmark(bookmark.id) },
-                )
+            error?.let { message ->
+                Surface(
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp),
+                    shape = MaterialTheme.shapes.medium,
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        SelectionContainer {
+                            Text(message)
+                        }
+                        TextButton(onClick = onDismissError) {
+                            Text("閉じる")
+                        }
+                    }
+                }
+            }
+
+            if (bookmarks.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "ブックマークはまだありません。\nチャットの下の「☆ ブックマーク」から保存できます。",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(24.dp),
+                    )
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    contentPadding = PaddingValues(12.dp),
+                ) {
+                    items(bookmarks, key = Bookmark::id) { bookmark ->
+                        BookmarkCard(
+                            bookmark = bookmark,
+                            onRemove = { onRemoveBookmark(bookmark.id) },
+                        )
+                    }
+                }
             }
         }
     }
