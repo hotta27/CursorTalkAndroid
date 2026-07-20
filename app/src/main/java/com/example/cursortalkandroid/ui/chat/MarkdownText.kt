@@ -1,16 +1,21 @@
 package com.example.cursortalkandroid.ui.chat
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -104,15 +109,23 @@ private fun InlineMarkdownText(
 
 @Composable
 private fun MarkdownTable(rows: List<List<String>>, color: Color) {
+    val borderColor = MaterialTheme.colorScheme.outline
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .horizontalScroll(rememberScrollState())
+            .border(1.dp, borderColor)
             .background(MaterialTheme.colorScheme.surfaceVariant),
     ) {
         rows.forEachIndexed { rowIndex, row ->
-            Row {
-                row.forEach { cell ->
+            if (rowIndex > 0) {
+                HorizontalDivider(color = borderColor, thickness = 1.dp)
+            }
+            Row(modifier = Modifier.height(IntrinsicSize.Min)) {
+                row.forEachIndexed { cellIndex, cell ->
+                    if (cellIndex > 0) {
+                        VerticalDivider(color = borderColor, thickness = 1.dp)
+                    }
                     InlineMarkdownText(
                         text = cell,
                         color = color,
