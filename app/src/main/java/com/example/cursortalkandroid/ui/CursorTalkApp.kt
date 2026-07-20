@@ -1,7 +1,12 @@
 package com.example.cursortalkandroid.ui
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -15,6 +20,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import com.example.cursortalkandroid.data.model.ChatMessage
 import com.example.cursortalkandroid.ui.bookmark.BookmarkScreen
+import com.example.cursortalkandroid.ui.chat.ChatInputBar
 import com.example.cursortalkandroid.ui.chat.ChatScreen
 import com.example.cursortalkandroid.ui.chat.ChatUiState
 
@@ -23,6 +29,7 @@ private enum class AppTab(val label: String, val icon: String) {
     Chat("チャット", "💬"),
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun CursorTalkApp(
     state: ChatUiState,
@@ -35,18 +42,31 @@ fun CursorTalkApp(
     modifier: Modifier = Modifier,
 ) {
     var selectedTab by rememberSaveable { mutableStateOf(AppTab.Chat) }
+    val imeVisible = WindowInsets.isImeVisible
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
         bottomBar = {
-            NavigationBar {
-                AppTab.entries.forEach { tab ->
-                    NavigationBarItem(
-                        selected = selectedTab == tab,
-                        onClick = { selectedTab = tab },
-                        icon = { Text(tab.icon) },
-                        label = { Text(tab.label) },
+            Column(modifier = Modifier.imePadding()) {
+                if (selectedTab == AppTab.Chat) {
+                    ChatInputBar(
+                        input = state.input,
+                        isStreaming = state.isStreaming || state.isLoadingHistory,
+                        onInputChange = onInputChange,
+                        onSend = onSend,
                     )
+                }
+                if (!imeVisible) {
+                    NavigationBar {
+                        AppTab.entries.forEach { tab ->
+                            NavigationBarItem(
+                                selected = selectedTab == tab,
+                                onClick = { selectedTab = tab },
+                                icon = { Text(tab.icon) },
+                                label = { Text(tab.label) },
+                            )
+                        }
+                    }
                 }
             }
         },
@@ -66,8 +86,6 @@ fun CursorTalkApp(
 
                 AppTab.Chat -> ChatScreen(
                     state = state,
-                    onInputChange = onInputChange,
-                    onSend = onSend,
                     onDismissError = onDismissError,
                     onSaveServerUrl = onSaveServerUrl,
                     onToggleBookmark = onToggleBookmark,
