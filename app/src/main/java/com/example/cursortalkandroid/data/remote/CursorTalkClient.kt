@@ -3,16 +3,17 @@ package com.example.cursortalkandroid.data.remote
 import com.example.cursortalkandroid.data.model.SseEvent
 import java.io.IOException
 import java.util.concurrent.TimeUnit
-import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.callbackFlow
-import okhttp3.Call
-import okhttp3.Callback
+import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.Response
 
 class CursorTalkClient(
     private val client: OkHttpClient = OkHttpClient.Builder()
@@ -25,7 +26,7 @@ class CursorTalkClient(
         baseUrl: String,
         message: String,
         sessionId: String?,
-    ): Flow<SseEvent> = callbackFlow {
+    ): Flow<SseEvent> = channelFlow {
         val body = buildJsonBody(message, sessionId)
             .toRequestBody(JSON_MEDIA_TYPE)
         val request = Request.Builder()
@@ -35,36 +36,33 @@ class CursorTalkClient(
             .build()
         val call = client.newCall(request)
 
-        call.enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) {
-                if (!call.isCanceled()) close(e) else close()
-            }
-
-            override fun onResponse(call: Call, response: Response) {
-                response.use {
+        try {
+            withContext(Dispatchers.IO) {
+                call.execute().use { response ->
                     if (!response.isSuccessful) {
                         val detail = response.body.string().take(500)
-                        close(IOException("サーバーエラー (${response.code})${detail.toDetail()}"))
-                        return
+                        throw IOException("サーバーエラー (${response.code})${detail.toDetail()}")
                     }
 
                     val parser = SseParser()
-                    try {
-                        val source = response.body.source()
-                        while (!source.exhausted() && !call.isCanceled()) {
-                            val line = source.readUtf8Line() ?: break
-                            parser.feed("$line\n").forEach { trySend(it).getOrThrow() }
-                        }
-                        parser.finish().forEach { trySend(it).getOrThrow() }
-                        close()
-                    } catch (exception: Exception) {
-                        if (!call.isCanceled()) close(exception) else close()
+                    val source = response.body.source()
+                    while (currentCoroutineContext().isActive && !source.exhausted()) {
+                        ensureActive()
+                        val line = source.readUtf8Line() ?: break
+                        parser.feed("$line\n").forEach { send(it) }
+                    }
+                    if (currentCoroutineContext().isActive) {
+                        parser.finish().forEach { send(it) }
                     }
                 }
             }
-        })
-
-        awaitClose { call.cancel() }
+        } catch (exception: IOException) {
+            // cancel() による切断は購読終了であり、ユーザー向けエラーにしない
+            ensureActive()
+            if (!call.isCanceled()) throw exception
+        } finally {
+            call.cancel()
+        }
     }
 
     private fun buildJsonBody(message: String, sessionId: String?): String = buildString {
