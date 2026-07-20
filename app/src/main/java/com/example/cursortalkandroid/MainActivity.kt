@@ -35,6 +35,7 @@ class MainActivity : ComponentActivity() {
                     onSend = chatViewModel::sendMessage,
                     onDismissError = chatViewModel::dismissError,
                     onSaveServerUrl = chatViewModel::saveServerUrl,
+                    onRefresh = chatViewModel::refreshHistory,
                 )
             }
         }

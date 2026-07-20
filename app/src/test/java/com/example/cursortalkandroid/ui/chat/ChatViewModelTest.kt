@@ -5,6 +5,7 @@ import com.example.cursortalkandroid.data.ChatPreferences
 import com.example.cursortalkandroid.data.ChatPreferencesStore
 import com.example.cursortalkandroid.data.ChatHistoryStore
 import com.example.cursortalkandroid.data.ChatRepository
+import com.example.cursortalkandroid.data.MAX_CHAT_HISTORY_MESSAGES
 import com.example.cursortalkandroid.data.model.ChatMessage
 import com.example.cursortalkandroid.data.model.ChatRole
 import com.example.cursortalkandroid.data.model.SseEvent
@@ -114,10 +115,77 @@ class ChatViewModelTest {
             assertEquals("新しい回答", historyStore.savedMessages.last().text)
         }
 
+    @Test
+    fun refreshFallsBackToLocalHistoryWhenRemoteApiIsUnavailable() =
+        runTest(mainDispatcherRule.testDispatcher) {
+            val localMessages = listOf(
+                ChatMessage(1, ChatRole.User, "ローカル質問"),
+                ChatMessage(2, ChatRole.Assistant, "ローカル回答"),
+            )
+            val historyStore = FakeHistoryStore(localMessages)
+            val repository = FakeRepository(emptyList(), fetchResult = null)
+            val viewModel = ChatViewModel(repository, FakePreferences(), historyStore)
+            advanceUntilIdle()
+
+            viewModel.refreshHistory()
+            advanceUntilIdle()
+
+            assertEquals(1, repository.fetchCount)
+            assertEquals(localMessages, viewModel.state.value.messages)
+            assertFalse(viewModel.state.value.isRefreshing)
+            assertNull(viewModel.state.value.error)
+        }
+
+    @Test
+    fun refreshAppliesRemoteHistoryAndPersistsIt() =
+        runTest(mainDispatcherRule.testDispatcher) {
+            val remoteMessages = listOf(
+                ChatMessage(5, ChatRole.User, "リモート質問"),
+                ChatMessage(6, ChatRole.Assistant, "リモート回答"),
+            )
+            val historyStore = FakeHistoryStore(emptyList())
+            val repository = FakeRepository(emptyList(), fetchResult = remoteMessages)
+            val viewModel = ChatViewModel(repository, FakePreferences(), historyStore)
+            advanceUntilIdle()
+
+            viewModel.refreshHistory()
+            advanceUntilIdle()
+
+            assertEquals(remoteMessages, viewModel.state.value.messages)
+            assertEquals(remoteMessages, historyStore.savedMessages)
+            assertFalse(viewModel.state.value.isRefreshing)
+        }
+
+    @Test
+    fun sendKeepsOnlyNewestMessagesWithinHistoryLimit() =
+        runTest(mainDispatcherRule.testDispatcher) {
+            val initialMessages = (1L..MAX_CHAT_HISTORY_MESSAGES.toLong()).map { id ->
+                ChatMessage(id, ChatRole.User, "m$id")
+            }
+            val historyStore = FakeHistoryStore(initialMessages)
+            val viewModel = ChatViewModel(
+                repository = FakeRepository(listOf(SseEvent.Delta("最新"))),
+                preferences = FakePreferences(),
+                historyStore = historyStore,
+            )
+            advanceUntilIdle()
+
+            viewModel.updateInput("追加")
+            viewModel.sendMessage()
+            advanceUntilIdle()
+
+            assertEquals(MAX_CHAT_HISTORY_MESSAGES, viewModel.state.value.messages.size)
+            assertEquals(3L, viewModel.state.value.messages.first().id)
+            assertEquals("最新", viewModel.state.value.messages.last().text)
+            assertEquals(MAX_CHAT_HISTORY_MESSAGES, historyStore.savedMessages.size)
+        }
+
     private class FakeRepository(
         private val events: List<SseEvent>,
+        private val fetchResult: List<ChatMessage>? = null,
     ) : ChatRepository {
         var requestCount = 0
+        var fetchCount = 0
 
         override fun streamMessage(
             baseUrl: String,
@@ -126,6 +194,14 @@ class ChatViewModelTest {
         ): Flow<SseEvent> = flow {
             requestCount++
             events.forEach { emit(it) }
+        }
+
+        override suspend fun fetchHistory(
+            baseUrl: String,
+            sessionId: String?,
+        ): List<ChatMessage>? {
+            fetchCount++
+            return fetchResult
         }
     }
 
