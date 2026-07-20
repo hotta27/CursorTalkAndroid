@@ -11,6 +11,14 @@ data class ChatMessage(
     val text: String,
 )
 
+data class Bookmark(
+    val id: Long,
+    val sourceMessageId: Long,
+    val role: ChatRole,
+    val text: String,
+    val savedAt: Long,
+)
+
 sealed interface SseEvent {
     data class Meta(val sessionId: String) : SseEvent
     data class Delta(val text: String) : SseEvent

@@ -14,6 +14,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
@@ -28,6 +29,8 @@ fun ChatMessageList(
     messages: List<ChatMessage>,
     isStreaming: Boolean,
     modifier: Modifier = Modifier,
+    bookmarkedSourceIds: Set<Long> = emptySet(),
+    onToggleBookmark: (ChatMessage) -> Unit = {},
 ) {
     if (messages.isEmpty()) {
         Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -53,12 +56,15 @@ fun ChatMessageList(
         contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
     ) {
         items(messages, key = ChatMessage::id) { message ->
+            val isActivelyStreaming = isStreaming &&
+                message.role == ChatRole.Assistant &&
+                message == messages.last()
             ChatBubble(
                 message = message,
-                showTyping = isStreaming &&
-                    message.role == ChatRole.Assistant &&
-                    message == messages.last() &&
-                    message.text.isEmpty(),
+                showTyping = isActivelyStreaming && message.text.isEmpty(),
+                canBookmark = !isActivelyStreaming && message.text.isNotBlank(),
+                isBookmarked = message.id in bookmarkedSourceIds,
+                onToggleBookmark = { onToggleBookmark(message) },
             )
         }
     }
@@ -68,6 +74,9 @@ fun ChatMessageList(
 private fun ChatBubble(
     message: ChatMessage,
     showTyping: Boolean,
+    canBookmark: Boolean,
+    isBookmarked: Boolean,
+    onToggleBookmark: () -> Unit,
 ) {
     val isUser = message.role == ChatRole.User
     val bubbleColor = if (isUser) {
@@ -102,6 +111,11 @@ private fun ChatBubble(
                         MarkdownText(message.text, color = contentColor)
                     }
                 }
+            }
+        }
+        if (canBookmark) {
+            TextButton(onClick = onToggleBookmark) {
+                Text(if (isBookmarked) "★ 保存済み" else "☆ ブックマーク")
             }
         }
     }

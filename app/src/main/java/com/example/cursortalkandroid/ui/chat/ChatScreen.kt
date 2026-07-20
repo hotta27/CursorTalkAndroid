@@ -21,6 +21,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.example.cursortalkandroid.data.model.ChatMessage
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -31,6 +32,7 @@ fun ChatScreen(
     onDismissError: () -> Unit,
     onSaveServerUrl: (String) -> Boolean,
     modifier: Modifier = Modifier,
+    onToggleBookmark: (ChatMessage) -> Unit = {},
 ) {
     var showSettings by remember { mutableStateOf(false) }
     var serverUrlDraft by remember(state.serverUrl, showSettings) {
@@ -86,6 +88,8 @@ fun ChatScreen(
                 messages = state.messages,
                 isStreaming = state.isStreaming,
                 modifier = Modifier.weight(1f),
+                bookmarkedSourceIds = state.bookmarkedSourceIds,
+                onToggleBookmark = onToggleBookmark,
             )
         }
     }
