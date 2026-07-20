@@ -12,6 +12,18 @@ import java.io.IOException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
+/** 端末に保持するチャット履歴の最大件数。超過分は古いメッセージから削除する。 */
+const val MAX_CHAT_HISTORY_MESSAGES = 100
+
+fun retainRecentChatMessages(
+    messages: List<ChatMessage>,
+    maxMessages: Int = MAX_CHAT_HISTORY_MESSAGES,
+): List<ChatMessage> = if (messages.size <= maxMessages) {
+    messages
+} else {
+    messages.takeLast(maxMessages)
+}
+
 interface ChatHistoryStore {
     suspend fun loadMessages(): List<ChatMessage>
     suspend fun saveMessages(messages: List<ChatMessage>)
@@ -34,7 +46,7 @@ class FileChatHistoryStore(
             DataInputStream(BufferedInputStream(file.openRead())).use { input ->
                 if (input.readInt() != FILE_MAGIC) throw IOException("Unsupported history format")
                 val count = input.readInt()
-                if (count !in 0..MAX_MESSAGES) throw IOException("Invalid message count")
+                if (count !in 0..MAX_CHAT_HISTORY_MESSAGES) throw IOException("Invalid message count")
 
                 List(count) {
                     val id = input.readLong()
@@ -58,7 +70,7 @@ class FileChatHistoryStore(
     }
 
     override suspend fun saveMessages(messages: List<ChatMessage>) = withContext(Dispatchers.IO) {
-        val retainedMessages = messages.takeLast(MAX_MESSAGES)
+        val retainedMessages = retainRecentChatMessages(messages)
         val outputStream = file.startWrite()
         try {
             val output = DataOutputStream(BufferedOutputStream(outputStream))
@@ -84,7 +96,6 @@ class FileChatHistoryStore(
 
     private companion object {
         const val FILE_MAGIC = 0x43544131
-        const val MAX_MESSAGES = 500
         const val MAX_MESSAGE_BYTES = 4 * 1024 * 1024
     }
 }

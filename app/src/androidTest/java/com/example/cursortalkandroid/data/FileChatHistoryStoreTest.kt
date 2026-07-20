@@ -24,4 +24,23 @@ class FileChatHistoryStoreTest {
             store.saveMessages(emptyList())
         }
     }
+
+    @Test
+    fun dropsOldestMessagesBeyondMaxLimit() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val store = FileChatHistoryStore(context)
+        val messages = (1L..120L).map { id ->
+            ChatMessage(id, ChatRole.User, "message-$id")
+        }
+
+        try {
+            store.saveMessages(messages)
+            val loaded = store.loadMessages()
+            assertEquals(MAX_CHAT_HISTORY_MESSAGES, loaded.size)
+            assertEquals(21L, loaded.first().id)
+            assertEquals(120L, loaded.last().id)
+        } finally {
+            store.saveMessages(emptyList())
+        }
+    }
 }

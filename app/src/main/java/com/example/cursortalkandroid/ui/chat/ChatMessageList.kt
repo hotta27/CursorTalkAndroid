@@ -29,21 +29,12 @@ fun ChatMessageList(
     isStreaming: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    if (messages.isEmpty()) {
-        Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text(
-                text = "メッセージを送信して会話を始めましょう。",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(24.dp),
-            )
-        }
-        return
-    }
-
     val listState = rememberLazyListState()
     val latestText = messages.lastOrNull()?.text.orEmpty()
     LaunchedEffect(messages.size, latestText) {
-        listState.animateScrollToItem(messages.lastIndex)
+        if (messages.isNotEmpty()) {
+            listState.animateScrollToItem(messages.lastIndex)
+        }
     }
 
     LazyColumn(
@@ -52,14 +43,30 @@ fun ChatMessageList(
         verticalArrangement = Arrangement.spacedBy(10.dp),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
     ) {
-        items(messages, key = ChatMessage::id) { message ->
-            ChatBubble(
-                message = message,
-                showTyping = isStreaming &&
-                    message.role == ChatRole.Assistant &&
-                    message == messages.last() &&
-                    message.text.isEmpty(),
-            )
+        if (messages.isEmpty()) {
+            item(key = "empty") {
+                Box(
+                    modifier = Modifier
+                        .fillParentMaxSize()
+                        .padding(24.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "メッセージを送信して会話を始めましょう。",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        } else {
+            items(messages, key = ChatMessage::id) { message ->
+                ChatBubble(
+                    message = message,
+                    showTyping = isStreaming &&
+                        message.role == ChatRole.Assistant &&
+                        message == messages.last() &&
+                        message.text.isEmpty(),
+                )
+            }
         }
     }
 }

@@ -14,6 +14,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -30,6 +31,7 @@ fun ChatScreen(
     onSend: () -> Unit,
     onDismissError: () -> Unit,
     onSaveServerUrl: (String) -> Boolean,
+    onRefresh: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var showSettings by remember { mutableStateOf(false) }
@@ -82,11 +84,19 @@ fun ChatScreen(
                     }
                 }
             }
-            ChatMessageList(
-                messages = state.messages,
-                isStreaming = state.isStreaming,
-                modifier = Modifier.weight(1f),
-            )
+            PullToRefreshBox(
+                isRefreshing = state.isRefreshing,
+                onRefresh = onRefresh,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+            ) {
+                ChatMessageList(
+                    messages = state.messages,
+                    isStreaming = state.isStreaming,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
         }
     }
 

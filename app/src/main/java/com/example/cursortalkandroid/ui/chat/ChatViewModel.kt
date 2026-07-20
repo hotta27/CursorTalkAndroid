@@ -11,6 +11,7 @@ import com.example.cursortalkandroid.data.EmptyChatHistoryStore
 import com.example.cursortalkandroid.data.model.ChatMessage
 import com.example.cursortalkandroid.data.model.ChatRole
 import com.example.cursortalkandroid.data.model.SseEvent
+import com.example.cursortalkandroid.data.retainRecentChatMessages
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -27,6 +28,7 @@ data class ChatUiState(
     val input: String = "",
     val isStreaming: Boolean = false,
     val isLoadingHistory: Boolean = true,
+    val isRefreshing: Boolean = false,
     val error: String? = null,
     val serverUrl: String = ChatPreferences.DEFAULT_SERVER_URL,
 )
@@ -46,11 +48,7 @@ class ChatViewModel(
         viewModelScope.launch {
             try {
                 sessionId = preferences.sessionId.first()
-                val messages = historyStore.loadMessages()
-                nextMessageId.set(messages.maxOfOrNull(ChatMessage::id) ?: 0)
-                mutableState.update {
-                    it.copy(messages = messages, isLoadingHistory = false)
-                }
+                applyMessages(historyStore.loadMessages(), loading = false)
             } catch (_: Exception) {
                 mutableState.update {
                     it.copy(
@@ -92,6 +90,29 @@ class ChatViewModel(
         return true
     }
 
+    fun refreshHistory() {
+        val snapshot = mutableState.value
+        if (snapshot.isRefreshing || snapshot.isStreaming || snapshot.isLoadingHistory) return
+
+        viewModelScope.launch {
+            mutableState.update { it.copy(isRefreshing = true, error = null) }
+            try {
+                val remoteMessages = repository.fetchHistory(snapshot.serverUrl, sessionId)
+                val messages = remoteMessages ?: historyStore.loadMessages()
+                applyMessages(messages, loading = false)
+                if (remoteMessages != null) {
+                    scheduleHistorySave(immediate = true)
+                }
+            } catch (_: Exception) {
+                mutableState.update {
+                    it.copy(error = "チャット履歴の更新に失敗しました。")
+                }
+            } finally {
+                mutableState.update { it.copy(isRefreshing = false) }
+            }
+        }
+    }
+
     fun sendMessage() {
         val snapshot = mutableState.value
         val text = snapshot.input.trim()
@@ -111,7 +132,7 @@ class ChatViewModel(
         )
         mutableState.update {
             it.copy(
-                messages = it.messages + userMessage + assistantMessage,
+                messages = retainRecentChatMessages(it.messages + userMessage + assistantMessage),
                 input = "",
                 isStreaming = true,
                 error = null,
@@ -139,6 +160,17 @@ class ChatViewModel(
                 mutableState.update { it.copy(isStreaming = false) }
                 scheduleHistorySave(immediate = true)
             }
+        }
+    }
+
+    private fun applyMessages(messages: List<ChatMessage>, loading: Boolean) {
+        val retained = retainRecentChatMessages(messages)
+        nextMessageId.set(retained.maxOfOrNull(ChatMessage::id) ?: 0)
+        mutableState.update {
+            it.copy(
+                messages = retained,
+                isLoadingHistory = loading,
+            )
         }
     }
 
